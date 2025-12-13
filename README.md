@@ -279,7 +279,7 @@ LogVar 弹幕 API 服务器
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/iurdaddy/danmu_api)
 
-**注意**：请将按钮链接中的 `https://github.com/huangxd-/danmu_api` 替换为你的实际 Git 仓库地址。编辑 `README.md` 并更新链接后，推送到仓库，点击按钮即可自动克隆和部署。
+**注意**：请将按钮链接中的 `https://github.com/huangxd-/danmu_api` 替换为你的实际 Git 仓库地址(已更改)。编辑 `README.md` 并更新链接后，推送到仓库，点击按钮即可自动克隆和部署。
 - **设置环境变量**：部署后，在 Cloudflare 仪表板中：
   1. 转到你的 Workers 项目。
   2. 转到“Settings” > “Variables”。
