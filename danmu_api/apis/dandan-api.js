@@ -59,7 +59,7 @@ function matchYear(anime, queryYear) {
   return animeYear === queryYear;
 }
 
-function matchSeason(anime, queryTitle, season) {
+export function matchSeason(anime, queryTitle, season) {
   const normalizedAnimeTitle = normalizeSpaces(anime.animeTitle);
   const normalizedQueryTitle = normalizeSpaces(queryTitle);
 
