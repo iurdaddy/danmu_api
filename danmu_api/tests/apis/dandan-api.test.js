@@ -6,7 +6,7 @@ dotenv.config();
 
 import test from 'node:test';
 import assert from 'node:assert';
-import { extractTitleSeasonEpisode, buildSearchAnimeUrl, matchSeason, matchAniAndEp, fallbackMatchAniAndEp } from '../../apis/dandan-api.js';
+import { extractTitleSeasonEpisode, buildSearchAnimeUrl, matchSeason, matchAniAndEp, fallbackMatchAniAndEp, filterSameEpisodeTitle } from '../../apis/dandan-api.js';
 import { Globals } from '../../configs/globals.js';
 import { normalizeTitleForMatch } from '../../utils/common-util.js';
 import { urlPrefix } from '../helpers/context.js';
@@ -136,4 +136,22 @@ test('fallback matching prefers the candidate of the target season', async () =>
   // 无同季候选或未指定季号时保持原有取值顺序
   assert.equal(await matchFallback([secondSeason], 3), 2001);
   assert.equal(await matchFallback([secondSeason, thirdSeason], null), 2001);
+});
+
+
+test('剧集去重保留首次条目和顺序，标题读取次数随集数线性增长', () => {
+  let reads = 0;
+  const episodes = Array.from({ length: 2000 }, (_, index) => ({
+    episodeId: index,
+    get episodeTitle() { reads++; return `第${index + 1}集`; }
+  }));
+  const first = episodes[0];
+  const extras = [first, { episodeTitle: '【另一平台】第1集' },
+    { episodeTitle: '剧场版', episodeId: 3000 }, { episodeTitle: '剧场版', episodeId: 3001 }];
+  const input = [...episodes, ...extras];
+  const result = filterSameEpisodeTitle(input);
+  assert.deepEqual(result, [...episodes, extras[2]]);
+  assert.ok(reads < input.length * 5, `标题被读取了 ${reads} 次`);
+  assert.strictEqual(result[0], first);
+  assert.equal(input.length, 2004);
 });
