@@ -928,11 +928,13 @@ async function searchAnimeBody(url, preferAnimeId = null, preferSource = null, d
 }
 
 export function filterSameEpisodeTitle(filteredTmpEpisodes) {
-    const filteredEpisodes = filteredTmpEpisodes.filter((episode, index, episodes) => {
-        // 查找当前 episode 标题是否在之前的 episodes 中出现过
-        return !episodes.slice(0, index).some(prevEpisode => {
-            return prevEpisode.episodeTitle === episode.episodeTitle;
-        });
+    // 保留首次出现的条目，避免长剧集列表反复扫描和复制前面的所有集数。
+    const seenTitles = new Set();
+    const filteredEpisodes = filteredTmpEpisodes.filter(episode => {
+        const title = episode.episodeTitle;
+        if (seenTitles.has(title)) return false;
+        seenTitles.add(title);
+        return true;
     });
     // 对聚合采集源（如360）中来自不同平台的同名集号做二次去重
     // 同一集号保留首次出现（最早平台）的条目

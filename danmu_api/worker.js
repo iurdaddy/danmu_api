@@ -27,31 +27,11 @@ let globals;
 async function handleRequest(req, env, deployPlatform, clientIp) {
   // 加载全局变量和环境变量配置
   globals = Globals.init(env);
+  globals.deployPlatform = deployPlatform;
 
   const url = new URL(req.url);
   let path = url.pathname;
   const method = req.method;
-
-  globals.deployPlatform = deployPlatform;
-  if (deployPlatform === "node") {
-    await judgeLocalCacheValid(path, deployPlatform);
-    const { judgeLocalRedisValid } = await import("./utils/local-redis-util.js");
-    await judgeLocalRedisValid(path);
-  }
-  await judgeRedisValid(path);
-  if (!globals.aiValid && globals.aiBaseUrl && globals.aiModel && globals.aiApiKey && path !== "/favicon.ico" && path !== "/robots.txt") {
-    const ai = new AIClient({
-      baseURL: globals.aiBaseUrl,
-      model: globals.aiModel,
-      apiKey: globals.aiApiKey,
-      systemPrompt: '回答尽量简洁',
-    })
-
-    const status = await ai.verify()
-    if (status.ok) {
-      globals.aiValid = true;
-    }
-  }
 
   log("info", `[system] [server] request url: ${JSON.stringify(url)}`);
   log("info", `[system] [server] request path: ${path}`);
@@ -105,6 +85,108 @@ async function handleRequest(req, env, deployPlatform, clientIp) {
         { errorCode: 403, success: false, message: "权限不足", errorMessage: "Favorite API requires ADMIN_TOKEN" },
         403
       );
+    }
+  }
+
+  // GET /
+  if (path === "/" && method === "GET") {
+    return handleUI();
+  }
+
+  if (path === "/favicon.ico" || path === "/robots.txt" || method === "OPTIONS") {
+    return new Response(null, {
+        status: 204,
+        headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, User-Agent"
+        }
+    });
+  }
+
+  // 如果 token 是默认值 87654321
+  if (globals.token === "87654321") {
+    if (parts.length > 0) {
+      // 如果第一段是正确的默认 token
+      if (parts[0] === "87654321" || parts[0] === globals.adminToken) {
+        // 移除 token，继续处理
+        path = "/" + parts.slice(1).join("/");
+      } else if (!knownApiPaths.includes(parts[0])) {
+        // 对于 /api/config 路径，我们允许无 token 访问，但返回有限信息
+        if (path === "/api/config" && method === "GET") {
+          return handleConfig(false); // 无权限
+        }
+        // 第一段不是已知的 API 路径，可能是错误的 token
+        // 返回 401
+        log("error", `[system] [server] Invalid token in path: ${path}`);
+        return jsonResponse(
+          { errorCode: 401, success: false, errorMessage: "Unauthorized" },
+          401
+        );
+      }
+      // 如果第一段是已知的 API 路径（如 "api"），允许直接访问
+    }
+  } else {
+    // token 不是默认值，必须严格校验
+    if (parts.length < 1 || (parts[0] !== globals.token && parts[0] !== globals.adminToken)) {
+      // 对于 /api/config 路径，如果使用默认 token，我们允许无 token 访问，但返回有限信息
+      if (path === "/api/config" && method === "GET") {
+        return handleConfig(false); // 无权限
+      }
+      // 收藏列表是公开只读接口；其他接口仍需严格校验 token
+      if (!isFavoriteListRequest) {
+        log("error", `[system] [server] Invalid or missing token in path: ${path}`);
+        return jsonResponse(
+          { errorCode: 401, success: false, errorMessage: "Unauthorized" },
+          401
+        );
+      }
+    } else {
+      // 移除 token 部分，剩下的才是真正的路径
+      path = "/" + parts.slice(1).join("/");
+    }
+  }
+
+  // 搜索与匹配共用独立额度；别名归一后计数，避免切换路径绕过限制。
+  const searchPath = path.replace(/\/+/g, '/').replace(/^(?:\/(?:api|v2))+(?=\/)/, '');
+  const isSearchRequest = (method === 'GET' && ['/search/anime', '/search/episodes'].includes(searchPath))
+    || (method === 'POST' && searchPath === '/match')
+    || (['GET', 'POST'].includes(method) && (['/danmaku', '/fongmi/danmaku'].includes(searchPath)
+      || path.endsWith('/danmaku/api/v2/fongmi/danmaku')));
+  const searchLimit = globals.searchRateLimitMaxRequests;
+  if (isSearchRequest && searchLimit > 0 && clientIp && clientIp !== 'unknown') {
+    const now = Date.now();
+    cleanupExpiredIPs(now);
+    // 仅在当前运行实例内限流；跨机房的严格额度应由平台边缘规则负责。
+    const key = `search:${clientIp}`;
+    const requests = globals.requestHistory.get(key) || [];
+    if (requests.length >= searchLimit) {
+      return new Response(JSON.stringify({ success: false, errorCode: 429, errorMessage: '搜索过于频繁，请稍后重试' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*', 'Retry-After': '60' }
+      });
+    }
+    requests.push(now);
+    globals.requestHistory.set(key, requests);
+  }
+
+  if (deployPlatform === "node") {
+    await judgeLocalCacheValid(path, deployPlatform);
+    const { judgeLocalRedisValid } = await import("./utils/local-redis-util.js");
+    await judgeLocalRedisValid(path);
+  }
+  await judgeRedisValid(path);
+  if (!globals.aiValid && globals.aiBaseUrl && globals.aiModel && globals.aiApiKey && path !== "/favicon.ico" && path !== "/robots.txt") {
+    const ai = new AIClient({
+      baseURL: globals.aiBaseUrl,
+      model: globals.aiModel,
+      apiKey: globals.aiApiKey,
+      systemPrompt: '回答尽量简洁',
+    })
+
+    const status = await ai.verify()
+    if (status.ok) {
+      globals.aiValid = true;
     }
   }
 
@@ -201,65 +283,6 @@ async function handleRequest(req, env, deployPlatform, clientIp) {
     // 限制记录数量不超过 MAX_RECORDS
     if (globals.reqRecords.length > globals.MAX_RECORDS) {
       globals.reqRecords = globals.reqRecords.slice(-globals.MAX_RECORDS);
-    }
-  }
-
-  // GET /
-  if (path === "/" && method === "GET") {
-    return handleUI();
-  }
-
-  if (path === "/favicon.ico" || path === "/robots.txt" || method === "OPTIONS") {
-    return new Response(null, {
-        status: 204,
-        headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, User-Agent"
-        }
-    });
-  }
-
-  // 如果 token 是默认值 87654321
-  if (globals.token === "87654321") {
-    if (parts.length > 0) {
-      // 如果第一段是正确的默认 token
-      if (parts[0] === "87654321" || parts[0] === globals.adminToken) {
-        // 移除 token，继续处理
-        path = "/" + parts.slice(1).join("/");
-      } else if (!knownApiPaths.includes(parts[0])) {
-        // 对于 /api/config 路径，我们允许无 token 访问，但返回有限信息
-        if (path === "/api/config" && method === "GET") {
-          return handleConfig(false); // 无权限
-        }
-        // 第一段不是已知的 API 路径，可能是错误的 token
-        // 返回 401
-        log("error", `[system] [server] Invalid token in path: ${path}`);
-        return jsonResponse(
-          { errorCode: 401, success: false, errorMessage: "Unauthorized" },
-          401
-        );
-      }
-      // 如果第一段是已知的 API 路径（如 "api"），允许直接访问
-    }
-  } else {
-    // token 不是默认值，必须严格校验
-    if (parts.length < 1 || (parts[0] !== globals.token && parts[0] !== globals.adminToken)) {
-      // 对于 /api/config 路径，如果使用默认 token，我们允许无 token 访问，但返回有限信息
-      if (path === "/api/config" && method === "GET") {
-        return handleConfig(false); // 无权限
-      }
-      // 收藏列表是公开只读接口；其他接口仍需严格校验 token
-      if (!isFavoriteListRequest) {
-        log("error", `[system] [server] Invalid or missing token in path: ${path}`);
-        return jsonResponse(
-          { errorCode: 401, success: false, errorMessage: "Unauthorized" },
-          401
-        );
-      }
-    } else {
-      // 移除 token 部分，剩下的才是真正的路径
-      path = "/" + parts.slice(1).join("/");
     }
   }
 
